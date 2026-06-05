@@ -99,11 +99,7 @@ app.post("/api/auth/register", async (req, res) => {
     const slug = saloonName.trim().replace(/\s+/g, "-") + "-" + saloonId.slice(0, 6);
 
     const { error: userErr } = await supabase.from("users").insert({
-      id: userId,
-      name,
-      email,
-      password: hashedPass,
-      role: "owner",
+      id: userId, name, email, password: hashedPass, role: "owner",
     });
     if (userErr) throw userErr;
 
@@ -137,26 +133,57 @@ app.post("/api/auth/register", async (req, res) => {
 
 // ─── ADMIN ────────────────────────────────────────────────────────────────────
 
+// جلب كل الصالونات مع إحصائياتها المالية
 app.get("/api/admin/saloons", authMiddleware, adminOnly, async (req, res) => {
   try {
-    const { data, error } = await supabase.from("saloons").select("*").order("created_at", { ascending: false });
+    const { data: saloons, error } = await supabase
+      .from("saloons")
+      .select("*")
+      .order("created_at", { ascending: false });
     if (error) throw error;
-    res.json(data);
+
+    // لكل صالون نحسب إجمالي المبالغ من حجوزاته
+    const saloonsWithStats = await Promise.all(saloons.map(async (s) => {
+      const { data: bookings } = await supabase
+        .from("bookings")
+        .select("price")
+        .eq("saloon_id", s.id)
+        .neq("status", "cancelled");
+
+      const bookingCount = bookings?.length || 0;
+      const totalAmount = (bookings || []).reduce((sum, b) => sum + (parseFloat(b.price) || 0), 0);
+
+      return {
+        ...s,
+        bookings: bookingCount,
+        totalAmount,
+      };
+    }));
+
+    res.json(saloonsWithStats);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
+// إحصائيات عامة مع إجمالي المبالغ
 app.get("/api/admin/stats", authMiddleware, adminOnly, async (req, res) => {
   try {
-    const { data: saloons } = await supabase.from("saloons").select("status, bookings_count");
-    const { count: totalBookings } = await supabase.from("bookings").select("id", { count: "exact", head: true });
+    const { data: saloons } = await supabase.from("saloons").select("status");
+    const { data: bookings } = await supabase
+      .from("bookings")
+      .select("price")
+      .neq("status", "cancelled");
+
+    const totalAmount = (bookings || []).reduce((sum, b) => sum + (parseFloat(b.price) || 0), 0);
+
     res.json({
       total: saloons.length,
       active: saloons.filter(s => s.status === "active").length,
       pending: saloons.filter(s => s.status === "pending").length,
       suspended: saloons.filter(s => s.status === "suspended").length,
-      totalBookings: totalBookings || 0,
+      totalBookings: bookings?.length || 0,
+      totalAmount,
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -169,6 +196,43 @@ app.patch("/api/admin/saloons/:id/status", authMiddleware, adminOnly, async (req
     const { data, error } = await supabase
       .from("saloons")
       .update({ status })
+      .eq("id", req.params.id)
+      .select()
+      .single();
+    if (error) throw error;
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// المدير يعدّل خدمات أي صالون
+app.put("/api/admin/saloons/:id/services", authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { services } = req.body;
+    const { data, error } = await supabase
+      .from("saloons")
+      .update({ services })
+      .eq("id", req.params.id)
+      .select()
+      .single();
+    if (error) throw error;
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// المدير يعدّل أوقات أي صالون
+app.put("/api/admin/saloons/:id/timeslots", authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { timeSlots, workDays } = req.body;
+    const update = {};
+    if (timeSlots) update.time_slots = timeSlots;
+    if (workDays) update.work_days = workDays;
+    const { data, error } = await supabase
+      .from("saloons")
+      .update(update)
       .eq("id", req.params.id)
       .select()
       .single();
@@ -287,9 +351,14 @@ app.post("/api/book/:slug", async (req, res) => {
     if (!name || !phone || !service || !day || !time)
       return res.status(400).json({ error: "جميع الحقول مطلوبة" });
 
+    // التحقق من رقم الجوال
+    const cleanPhone = phone.replace(/\s+/g, "");
+    if (cleanPhone.length < 9)
+      return res.status(400).json({ error: "رقم الجوال غير صحيح، أدخل الرقم كاملاً" });
+
     const { data: saloon } = await supabase
       .from("saloons")
-      .select("id, name")
+      .select("id, name, services")
       .eq("slug", req.params.slug)
       .eq("status", "active")
       .single();
@@ -305,20 +374,20 @@ app.post("/api/book/:slug", async (req, res) => {
       .single();
     if (taken) return res.status(409).json({ error: "هذا الوقت محجوز مسبقاً" });
 
+    // استخراج سعر الخدمة وحفظه مع الحجز
+    const svc = (saloon.services || []).find(s => s.name === service);
+    const price = svc ? parseFloat(svc.price) || 0 : 0;
+
     const { data: booking, error } = await supabase.from("bookings").insert({
       id: uuidv4(),
       saloon_id: saloon.id,
       saloon_name: saloon.name,
-      name,
-      phone,
-      service,
-      day,
-      time,
+      name, phone: cleanPhone, service, day, time,
+      price,
       status: "confirmed",
     }).select().single();
     if (error) throw error;
 
-    // increment bookings count
     await supabase.rpc("increment_bookings", { saloon_id: saloon.id });
 
     res.json({ success: true, booking });
