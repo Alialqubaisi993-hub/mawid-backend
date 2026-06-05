@@ -390,10 +390,98 @@ app.post("/api/book/:slug", async (req, res) => {
 
     await supabase.rpc("increment_bookings", { saloon_id: saloon.id });
 
+    // إشعار واتساب لصاحب الصالون
+    try {
+      const { data: saloonFull } = await supabase.from("saloons").select("phone").eq("id", saloon.id).single();
+      if (saloonFull?.phone) {
+        const ownerPhone = saloonFull.phone.replace(/[^0-9]/g, "");
+        const msg = encodeURIComponent(`🔔 حجز جديد في مَوعِد\n👤 ${name}\n📋 ${service}\n📅 ${day} — ${time}\n📞 ${cleanPhone}`);
+        const waUrl = `https://api.whatsapp.com/send?phone=${ownerPhone}&text=${msg}`;
+        // نحفظ رابط الواتساب في الحجز للمرجعية (اختياري)
+        await supabase.from("bookings").update({ whatsapp_url: waUrl }).eq("id", booking.id);
+      }
+    } catch (waErr) { console.log("WhatsApp notification skipped:", waErr.message); }
+
     res.json({ success: true, booking });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: "خطأ في الحجز" });
+  }
+});
+
+
+// ─── ADMIN USERS ──────────────────────────────────────────────────────────────
+
+// جلب كل المستخدمين
+app.get("/api/admin/users", authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("users")
+      .select("id, name, email, role, created_at")
+      .order("created_at", { ascending: false });
+    if (error) throw error;
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// إضافة مستخدم جديد
+app.post("/api/admin/users", authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { name, email, password, role } = req.body;
+    if (!name || !email || !password) return res.status(400).json({ error: "جميع الحقول مطلوبة" });
+
+    const { data: existing } = await supabase.from("users").select("id").eq("email", email).single();
+    if (existing) return res.status(400).json({ error: "البريد مسجل مسبقاً" });
+
+    const userId = uuidv4();
+    const hashedPass = bcrypt.hashSync(password, 10);
+
+    const { error } = await supabase.from("users").insert({
+      id: userId, name, email, password: hashedPass, role: role || "owner",
+    });
+    if (error) throw error;
+
+    // إذا كان صاحب صالون، أنشئ صالون فارغ له
+    if (role === "owner") {
+      const saloonId = uuidv4();
+      const slug = name.trim().replace(/\s+/g, "-") + "-" + saloonId.slice(0, 6);
+      await supabase.from("saloons").insert({
+        id: saloonId, owner_id: userId, name: name + " صالون",
+        owner_name: name, phone: "", city: "", status: "pending",
+        plan: "free", slug, bookings_count: 0, services: [], work_days: [], time_slots: [],
+      });
+    }
+
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// حذف مستخدم
+app.delete("/api/admin/users/:id", authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { error } = await supabase.from("users").delete().eq("id", req.params.id);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// تغيير كلمة المرور
+app.patch("/api/admin/users/:id/password", authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { password } = req.body;
+    if (!password) return res.status(400).json({ error: "كلمة المرور مطلوبة" });
+    const hashedPass = bcrypt.hashSync(password, 10);
+    const { error } = await supabase.from("users").update({ password: hashedPass }).eq("id", req.params.id);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
