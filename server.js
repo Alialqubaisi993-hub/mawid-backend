@@ -358,11 +358,16 @@ app.post("/api/book/:slug", async (req, res) => {
 
     const { data: saloon } = await supabase
       .from("saloons")
-      .select("id, name, services")
+      .select("id, name, services, trial_ends_at")
       .eq("slug", req.params.slug)
       .eq("status", "active")
       .single();
     if (!saloon) return res.status(404).json({ error: "الصالون غير موجود" });
+
+    // التحقق من انتهاء الفترة التجريبية
+    if (saloon.trial_ends_at && new Date(saloon.trial_ends_at) < new Date()) {
+      return res.status(403).json({ error: "انتهت فترة الاشتراك، يرجى التواصل مع مزود الخدمة" });
+    }
 
     const { data: taken } = await supabase
       .from("bookings")
@@ -480,6 +485,29 @@ app.patch("/api/admin/users/:id/password", authMiddleware, adminOnly, async (req
     const { error } = await supabase.from("users").update({ password: hashedPass }).eq("id", req.params.id);
     if (error) throw error;
     res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
+// ─── ADMIN TRIAL ──────────────────────────────────────────────────────────────
+
+// تحديث فترة الاشتراك
+app.patch("/api/admin/saloons/:id/trial", authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { trial_starts_at, trial_ends_at } = req.body;
+    const update = {};
+    if (trial_starts_at) update.trial_starts_at = trial_starts_at;
+    if (trial_ends_at) update.trial_ends_at = trial_ends_at;
+    const { data, error } = await supabase
+      .from("saloons")
+      .update(update)
+      .eq("id", req.params.id)
+      .select()
+      .single();
+    if (error) throw error;
+    res.json(data);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
