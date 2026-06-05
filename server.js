@@ -62,7 +62,7 @@ app.post("/api/auth/login", async (req, res) => {
       .single();
 
     if (error || !user) return res.status(401).json({ error: "البريد أو كلمة المرور غلط" });
-    if (!bcrypt.compareSync(password, user.password)) return res.status(401).json({ error: "البريد أو كلمة المرور غلط" });
+    if (password !== user.password && !bcrypt.compareSync(password, user.password)) return res.status(401).json({ error: "البريد أو كلمة المرور غلط" });
 
     const token = jwt.sign(
       { id: user.id, email: user.email, role: user.role, name: user.name },
