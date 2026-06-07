@@ -456,19 +456,46 @@ app.post("/api/book/:slug", async (req, res) => {
       return res.status(403).json({ error: "انتهت فترة الاشتراك، يرجى التواصل مع مزود الخدمة" });
     }
 
-    const { data: taken } = await supabase
-      .from("bookings")
-      .select("id")
-      .eq("saloon_id", saloon.id)
-      .eq("day", day)
-      .eq("time", time)
-      .neq("status", "cancelled")
-      .single();
-    if (taken) return res.status(409).json({ error: "هذا الوقت محجوز مسبقاً" });
+    // دالة تحويل الوقت العربي لدقائق
+    const timeToMins = (t) => {
+      if (!t) return 0;
+      const isPM = t.includes("م");
+      const isAM = t.includes("ص");
+      const cleaned = t.replace("ص","").replace("م","").trim();
+      let [h, m] = cleaned.split(":").map(Number);
+      if (isPM && h !== 12) h += 12;
+      if (isAM && h === 12) h = 0;
+      return h * 60 + (m || 0);
+    };
 
-    // استخراج سعر الخدمة وحفظه مع الحجز
+    // استخراج سعر ومدة الخدمة الجديدة
     const svc = (saloon.services || []).find(s => s.name === service);
     const price = svc ? parseFloat(svc.price) || 0 : 0;
+    const newDuration = parseInt(svc?.duration) || 30;
+    const newStart = timeToMins(time);
+    const newEnd = newStart + newDuration;
+
+    // جلب كل حجوزات نفس اليوم
+    const { data: dayBookings } = await supabase
+      .from("bookings")
+      .select("time, service")
+      .eq("saloon_id", saloon.id)
+      .eq("day", day)
+      .neq("status", "cancelled");
+
+    // التحقق من التعارض في الاتجاهين
+    const hasConflict = (dayBookings || []).some(b => {
+      const existSvc = (saloon.services || []).find(s => s.name === b.service);
+      const existDuration = parseInt(existSvc?.duration) || 30;
+      const existStart = timeToMins(b.time);
+      const existEnd = existStart + existDuration;
+
+      // الحجز الجديد يتعارض مع حجز موجود إذا:
+      // بداية الجديد تقع ضمن الموجود، أو بداية الموجود تقع ضمن الجديد
+      return (newStart < existEnd && newEnd > existStart);
+    });
+
+    if (hasConflict) return res.status(409).json({ error: "هذا الوقت متعارض مع حجز موجود" });
 
     const { data: booking, error } = await supabase.from("bookings").insert({
       id: uuidv4(),
