@@ -86,8 +86,9 @@ app.post("/api/auth/login", async (req, res) => {
 // Register (owner)
 app.post("/api/auth/register", async (req, res) => {
   try {
-    const { name, email, password, saloonName, phone, city } = req.body;
-    if (!name || !email || !password || !saloonName || !phone)
+    const { name, email, password, saloonName, activityName, phone, city } = req.body;
+    const businessName = activityName || saloonName;
+    if (!name || !email || !password || !businessName || !phone)
       return res.status(400).json({ error: "جميع الحقول مطلوبة" });
 
     const { data: existing } = await supabase.from("users").select("id").eq("email", email).single();
@@ -96,7 +97,7 @@ app.post("/api/auth/register", async (req, res) => {
     const userId = uuidv4();
     const saloonId = uuidv4();
     const hashedPass = bcrypt.hashSync(password, 10);
-    const slug = saloonName.trim().replace(/\s+/g, "-") + "-" + saloonId.slice(0, 6);
+    const slug = businessName.trim().replace(/\s+/g, "-") + "-" + saloonId.slice(0, 6);
 
     const { error: userErr } = await supabase.from("users").insert({
       id: userId, name, email, password: hashedPass, role: "owner",
@@ -106,7 +107,7 @@ app.post("/api/auth/register", async (req, res) => {
     const { error: saloonErr } = await supabase.from("saloons").insert({
       id: saloonId,
       owner_id: userId,
-      name: saloonName,
+      name: businessName,
       owner_name: name,
       phone,
       city: city || "",
