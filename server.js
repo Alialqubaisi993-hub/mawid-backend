@@ -375,15 +375,58 @@ app.get("/api/book/:slug", async (req, res) => {
 app.get("/api/book/:slug/booked", async (req, res) => {
   try {
     const { day } = req.query;
-    const { data: saloon } = await supabase.from("saloons").select("id").eq("slug", req.params.slug).single();
+    const { data: saloon } = await supabase.from("saloons").select("id, services, time_slots").eq("slug", req.params.slug).single();
     if (!saloon) return res.status(404).json({ error: "غير موجود" });
-    const { data } = await supabase
+
+    const { data: bookings } = await supabase
       .from("bookings")
-      .select("time")
+      .select("time, service")
       .eq("saloon_id", saloon.id)
       .eq("day", day)
       .neq("status", "cancelled");
-    res.json((data || []).map(b => b.time));
+
+    // دالة تحويل الوقت العربي لدقائق
+    const timeToMinutes = (t) => {
+      if (!t) return 0;
+      const isAM = t.includes("ص");
+      const isPM = t.includes("م");
+      const cleaned = t.replace("ص", "").replace("م", "").trim();
+      let [h, m] = cleaned.split(":").map(Number);
+      if (isPM && h !== 12) h += 12;
+      if (isAM && h === 12) h = 0;
+      return h * 60 + (m || 0);
+    };
+
+    // دالة تحويل الدقائق لوقت عربي
+    const minutesToTime = (mins) => {
+      const h24 = Math.floor(mins / 60) % 24;
+      const m = mins % 60;
+      const isAM = h24 < 12;
+      const h12 = h24 === 0 ? 12 : h24 > 12 ? h24 - 12 : h24;
+      const suffix = isAM ? "ص" : "م";
+      return `${h12}:${m.toString().padStart(2, "0")} ${suffix}`;
+    };
+
+    // حساب كل الأوقات المحجوزة بما فيها امتداد مدة الخدمة
+    const blockedTimes = new Set();
+    const timeSlots = saloon.time_slots || [];
+
+    (bookings || []).forEach(b => {
+      const svc = (saloon.services || []).find(s => s.name === b.service);
+      const durationStr = svc?.duration || "30 دقيقة";
+      const durationMins = parseInt(durationStr) || 30;
+      const startMins = timeToMinutes(b.time);
+
+      // حجب كل الأوقات اللي تقع ضمن مدة الخدمة
+      timeSlots.forEach(slot => {
+        const slotMins = timeToMinutes(slot);
+        if (slotMins >= startMins && slotMins < startMins + durationMins) {
+          blockedTimes.add(slot);
+        }
+      });
+    });
+
+    res.json([...blockedTimes]);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -589,6 +632,30 @@ app.patch("/api/admin/saloons/:id/trial", authMiddleware, adminOnly, async (req,
       .single();
     if (error) throw error;
     res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
+// إلغاء موعد من صاحب النشاط
+app.patch("/api/owner/bookings/:id/cancel", authMiddleware, ownerOnly, async (req, res) => {
+  try {
+    const { reason } = req.body;
+    // تحقق إن الحجز يخص صالون صاحب النشاط
+    const { data: saloon } = await supabase.from("saloons").select("id").eq("owner_id", req.user.id).single();
+    if (!saloon) return res.status(404).json({ error: "لا يوجد نشاط" });
+
+    const { data: booking, error } = await supabase
+      .from("bookings")
+      .update({ status: "cancelled", cancel_reason: reason || "اعتذار من صاحب النشاط" })
+      .eq("id", req.params.id)
+      .eq("saloon_id", saloon.id)
+      .select()
+      .single();
+    if (error) throw error;
+
+    res.json({ success: true, booking });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
