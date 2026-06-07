@@ -445,7 +445,7 @@ app.post("/api/book/:slug", async (req, res) => {
 
     const { data: saloon } = await supabase
       .from("saloons")
-      .select("id, name, services, trial_ends_at")
+      .select("id, name, services, trial_ends_at, time_slots")
       .eq("slug", req.params.slug)
       .eq("status", "active")
       .single();
@@ -468,10 +468,20 @@ app.post("/api/book/:slug", async (req, res) => {
       return h * 60 + (m || 0);
     };
 
+    // دالة استخراج الدقائق من نص المدة "60 دقيقة" أو "1 ساعة" أو "90"
+    const parseDuration = (dur) => {
+      if (!dur) return 30;
+      const num = parseInt(dur);
+      if (isNaN(num)) return 30;
+      // إذا كان فيه "ساعة" × 60
+      if (dur.includes("ساعة") || dur.includes("ساعه") || dur.includes("hour")) return num * 60;
+      return num;
+    };
+
     // استخراج سعر ومدة الخدمة الجديدة
     const svc = (saloon.services || []).find(s => s.name === service);
     const price = svc ? parseFloat(svc.price) || 0 : 0;
-    const newDuration = parseInt(svc?.duration) || 30;
+    const newDuration = parseDuration(svc?.duration);
     const newStart = timeToMins(time);
     const newEnd = newStart + newDuration;
 
@@ -486,16 +496,14 @@ app.post("/api/book/:slug", async (req, res) => {
     // التحقق من التعارض في الاتجاهين
     const hasConflict = (dayBookings || []).some(b => {
       const existSvc = (saloon.services || []).find(s => s.name === b.service);
-      const existDuration = parseInt(existSvc?.duration) || 30;
+      const existDuration = parseDuration(existSvc?.duration);
       const existStart = timeToMins(b.time);
       const existEnd = existStart + existDuration;
-
-      // الحجز الجديد يتعارض مع حجز موجود إذا:
-      // بداية الجديد تقع ضمن الموجود، أو بداية الموجود تقع ضمن الجديد
+      // يتعارض إذا تداخل الوقتان
       return (newStart < existEnd && newEnd > existStart);
     });
 
-    if (hasConflict) return res.status(409).json({ error: "هذا الوقت متعارض مع حجز موجود" });
+    if (hasConflict) return res.status(409).json({ error: "هذا الوقت متعارض مع حجز موجود، الرجاء اختيار وقت آخر" });
 
     const { data: booking, error } = await supabase.from("bookings").insert({
       id: uuidv4(),
