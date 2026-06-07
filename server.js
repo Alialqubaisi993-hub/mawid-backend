@@ -253,7 +253,7 @@ app.get("/api/owner/saloon", authMiddleware, ownerOnly, async (req, res) => {
       .select("*")
       .eq("owner_id", req.user.id)
       .single();
-    if (error) return res.status(404).json({ error: "لا يوجد صالون مرتبط" });
+    if (error) return res.status(404).json({ error: "لا يوجد نشاط مرتبط" });
     res.json(data);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -298,7 +298,7 @@ app.put("/api/owner/saloon/timeslots", authMiddleware, ownerOnly, async (req, re
 app.get("/api/owner/bookings", authMiddleware, ownerOnly, async (req, res) => {
   try {
     const { data: saloon } = await supabase.from("saloons").select("id").eq("owner_id", req.user.id).single();
-    if (!saloon) return res.status(404).json({ error: "لا يوجد صالون" });
+    if (!saloon) return res.status(404).json({ error: "لا يوجد نشاط" });
     const { data, error } = await supabase
       .from("bookings")
       .select("*")
@@ -322,7 +322,7 @@ app.get("/api/book/:slug", async (req, res) => {
       .eq("slug", req.params.slug)
       .eq("status", "active")
       .single();
-    if (error || !data) return res.status(404).json({ error: "الصالون غير موجود أو غير مفعّل" });
+    if (error || !data) return res.status(404).json({ error: "النشاط غير موجود أو غير مفعّل" });
     res.json(data);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -363,7 +363,7 @@ app.post("/api/book/:slug", async (req, res) => {
       .eq("slug", req.params.slug)
       .eq("status", "active")
       .single();
-    if (!saloon) return res.status(404).json({ error: "الصالون غير موجود" });
+    if (!saloon) return res.status(404).json({ error: "النشاط غير موجود" });
 
     // التحقق من انتهاء الفترة التجريبية
     if (saloon.trial_ends_at && new Date(saloon.trial_ends_at) < new Date()) {
@@ -396,7 +396,7 @@ app.post("/api/book/:slug", async (req, res) => {
 
     await supabase.rpc("increment_bookings", { saloon_id: saloon.id });
 
-    // إشعار واتساب لصاحب الصالون
+    // إشعار واتساب لصاحب النشاط
     try {
       const { data: saloonFull } = await supabase.from("saloons").select("phone").eq("id", saloon.id).single();
       if (saloonFull?.phone) {
@@ -454,7 +454,7 @@ app.post("/api/admin/users", authMiddleware, adminOnly, async (req, res) => {
       const saloonId = uuidv4();
       const slug = name.trim().replace(/\s+/g, "-") + "-" + saloonId.slice(0, 6);
       await supabase.from("saloons").insert({
-        id: saloonId, owner_id: userId, name: name + " صالون",
+        id: saloonId, owner_id: userId, name: name + " نشاط",
         owner_name: name, phone: "", city: "", status: "pending",
         plan: "free", slug, bookings_count: 0, services: [], work_days: [], time_slots: [],
       });
