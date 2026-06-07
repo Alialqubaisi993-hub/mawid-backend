@@ -299,14 +299,57 @@ app.get("/api/owner/bookings", authMiddleware, ownerOnly, async (req, res) => {
   try {
     const { data: saloon } = await supabase.from("saloons").select("id").eq("owner_id", req.user.id).single();
     if (!saloon) return res.status(404).json({ error: "لا يوجد نشاط" });
+
+    // تصفير يومي: نرجع حجوزات اليوم الحالي فقط (من 12 منتصف الليل)
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+
     const { data, error } = await supabase
       .from("bookings")
       .select("*")
       .eq("saloon_id", saloon.id)
       .neq("status", "cancelled")
+      .gte("created_at", todayStart.toISOString())
       .order("created_at", { ascending: false });
     if (error) throw error;
     res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// تقرير مالي بتواريخ من/إلى
+app.get("/api/owner/report", authMiddleware, ownerOnly, async (req, res) => {
+  try {
+    const { from, to } = req.query;
+    const { data: saloon } = await supabase.from("saloons").select("id").eq("owner_id", req.user.id).single();
+    if (!saloon) return res.status(404).json({ error: "لا يوجد نشاط" });
+
+    let query = supabase
+      .from("bookings")
+      .select("*")
+      .eq("saloon_id", saloon.id)
+      .neq("status", "cancelled")
+      .order("created_at", { ascending: false });
+
+    if (from) {
+      const fromDate = new Date(from);
+      fromDate.setHours(0, 0, 0, 0);
+      query = query.gte("created_at", fromDate.toISOString());
+    }
+    if (to) {
+      const toDate = new Date(to);
+      toDate.setHours(23, 59, 59, 999);
+      query = query.lte("created_at", toDate.toISOString());
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+
+    const totalAmount = (data || []).reduce((sum, b) => sum + (parseFloat(b.price) || 0), 0);
+    const totalBookings = data?.length || 0;
+
+    res.json({ bookings: data, totalAmount, totalBookings });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
