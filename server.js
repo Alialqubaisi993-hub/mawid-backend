@@ -699,32 +699,21 @@ app.patch("/api/owner/bookings/:id/cancel", authMiddleware, ownerOnly, async (re
 // ─── IMAGE UPLOAD ─────────────────────────────────────────────────────────────
 
 // رفع صورة خدمة لـ Supabase Storage
-app.post("/api/owner/upload-image", authMiddleware, ownerOnly, async (req, res) => {
+app.post("/api/owner/upload-image", authMiddleware, ownerOnly, express.raw({ type: "image/*", limit: "10mb" }), async (req, res) => {
   try {
-    const chunks = [];
-    let contentType = req.headers["content-type"] || "image/jpeg";
-    let fileName = `service-${uuidv4()}.jpg`;
+    const contentType = req.headers["content-type"] || "image/jpeg";
+    const ext = contentType.includes("png") ? "png" : contentType.includes("gif") ? "gif" : contentType.includes("webp") ? "webp" : "jpg";
+    const fileName = `service-${uuidv4()}.${ext}`;
+    const buffer = req.body;
 
-    // قراءة الـ body كـ buffer
-    await new Promise((resolve, reject) => {
-      req.on("data", chunk => chunks.push(chunk));
-      req.on("end", resolve);
-      req.on("error", reject);
-    });
+    if (!buffer || buffer.length === 0) return res.status(400).json({ error: "لا توجد صورة" });
 
-    const buffer = Buffer.concat(chunks);
-
-    // رفع لـ Supabase Storage
     const { data, error } = await supabase.storage
       .from("services")
-      .upload(fileName, buffer, {
-        contentType,
-        upsert: false,
-      });
+      .upload(fileName, buffer, { contentType, upsert: false });
 
     if (error) throw error;
 
-    // نرجع الرابط العام
     const { data: urlData } = supabase.storage
       .from("services")
       .getPublicUrl(fileName);
