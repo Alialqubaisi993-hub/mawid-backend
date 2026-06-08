@@ -699,12 +699,14 @@ app.patch("/api/owner/bookings/:id/cancel", authMiddleware, ownerOnly, async (re
 // ─── IMAGE UPLOAD ─────────────────────────────────────────────────────────────
 
 // رفع صورة خدمة لـ Supabase Storage
-app.post("/api/owner/upload-image", authMiddleware, ownerOnly, express.raw({ type: "image/*", limit: "10mb" }), async (req, res) => {
+app.post("/api/owner/upload-image", authMiddleware, ownerOnly, express.raw({ type: "*/*", limit: "10mb" }), async (req, res) => {
   try {
     const contentType = req.headers["content-type"] || "image/jpeg";
     const ext = contentType.includes("png") ? "png" : contentType.includes("gif") ? "gif" : contentType.includes("webp") ? "webp" : "jpg";
     const fileName = `service-${uuidv4()}.${ext}`;
     const buffer = req.body;
+
+    console.log("Upload attempt:", { contentType, fileName, bufferSize: buffer?.length });
 
     if (!buffer || buffer.length === 0) return res.status(400).json({ error: "لا توجد صورة" });
 
@@ -712,14 +714,19 @@ app.post("/api/owner/upload-image", authMiddleware, ownerOnly, express.raw({ typ
       .from("services")
       .upload(fileName, buffer, { contentType, upsert: false });
 
-    if (error) throw error;
+    if (error) {
+      console.error("Supabase storage error:", error);
+      throw error;
+    }
 
     const { data: urlData } = supabase.storage
       .from("services")
       .getPublicUrl(fileName);
 
+    console.log("Upload success:", urlData.publicUrl);
     res.json({ url: urlData.publicUrl });
   } catch (e) {
+    console.error("Upload error:", e.message);
     res.status(500).json({ error: e.message });
   }
 });
