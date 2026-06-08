@@ -696,5 +696,44 @@ app.patch("/api/owner/bookings/:id/cancel", authMiddleware, ownerOnly, async (re
   }
 });
 
+// ─── IMAGE UPLOAD ─────────────────────────────────────────────────────────────
+
+// رفع صورة خدمة لـ Supabase Storage
+app.post("/api/owner/upload-image", authMiddleware, ownerOnly, async (req, res) => {
+  try {
+    const chunks = [];
+    let contentType = req.headers["content-type"] || "image/jpeg";
+    let fileName = `service-${uuidv4()}.jpg`;
+
+    // قراءة الـ body كـ buffer
+    await new Promise((resolve, reject) => {
+      req.on("data", chunk => chunks.push(chunk));
+      req.on("end", resolve);
+      req.on("error", reject);
+    });
+
+    const buffer = Buffer.concat(chunks);
+
+    // رفع لـ Supabase Storage
+    const { data, error } = await supabase.storage
+      .from("services")
+      .upload(fileName, buffer, {
+        contentType,
+        upsert: false,
+      });
+
+    if (error) throw error;
+
+    // نرجع الرابط العام
+    const { data: urlData } = supabase.storage
+      .from("services")
+      .getPublicUrl(fileName);
+
+    res.json({ url: urlData.publicUrl });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ─── START ────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => console.log(`✅ Mawid Backend on port ${PORT}`));
